@@ -1,0 +1,2 @@
+pose_landmarker_lite.task / pose_landmarker_full.task
+출처: MediaPipe Pose Landmarker — Apache License 2.0 (Google). 변경 없이 사용.

@@ -1,0 +1,16 @@
+{
+  "name": "통통 테니스!",
+  "short_name": "통통테니스",
+  "description": "카메라로 화면 양쪽에 한 명씩, 손을 라켓처럼 휘두르는 가족 테니스 게임",
+  "lang": "ko",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#1b1640",
+  "theme_color": "#1b1640",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
