@@ -10,12 +10,11 @@ const params = new URLSearchParams(location.search);
 const canvas = $('#game');
 const sound = new TennisSound();
 const engine = new TennisEngine(canvas, sound);
-const mouseSide = params.has('mouse') ? (params.get('mouse') === 'right' ? 1 : 0) : null; // PC 확인용
-if (mouseSide != null) engine.enableMouse(mouseSide);
+const forceTouch = params.has('mouse') || params.has('touch'); // PC 확인용: 폰 모드로 마우스 플레이
 
 // ── 설정 (이 기기에만 저장) ──
 const DEFAULTS = {
-  names: ['', ''], types: ['adult', 'kid'], target: RULES.DEFAULT_TARGET,
+  play: 'camera', names: ['', ''], types: ['adult', 'kid'], target: RULES.DEFAULT_TARGET,
   facing: 'environment', cameraId: '', mirror: true, sfx: true, bgm: true, quality: 'high', debug: false,
 };
 const settings = { ...DEFAULTS, ...store.get('wt.settings.v1', {}) };
@@ -23,6 +22,8 @@ if (!Array.isArray(settings.names) || settings.names.length !== 2) settings.name
 if (!Array.isArray(settings.types) || settings.types.length !== 2 || !settings.types.every((t) => LEVELS[t])) settings.types = [...DEFAULTS.types];
 if (!RULES.TARGETS.includes(settings.target)) settings.target = RULES.DEFAULT_TARGET;
 if (!QUALITY[settings.quality]) settings.quality = 'high';
+if (settings.play !== 'touch') settings.play = 'camera';
+if (forceTouch) settings.play = 'touch';
 const saveSettings = () => store.set('wt.settings.v1', settings);
 const applySettings = () => {
   sound.sfxOn = settings.sfx; sound.bgmOn = settings.bgm;
@@ -42,7 +43,9 @@ function show(name) {
 
 // 이름: 화면에만 쓰고(글자로만 출력) 이 기기에만 저장. 꺾쇠·제어문자 제거, 6글자
 const cleanName = (s, side) => String(s || '').replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, 6) || (side ? '2P' : '1P');
-const needsCamera = () => settings.types.some((t, s) => t !== 'cpu' && s !== mouseSide);
+const hasHuman = () => settings.types.some((t) => t !== 'cpu');
+const isTouchPlay = () => settings.play === 'touch' && hasHuman();
+const needsCamera = () => settings.play === 'camera' && hasHuman();
 
 // ── 시작 화면 ──
 function renderSetup() {
@@ -51,22 +54,25 @@ function renderSetup() {
     $$(`.seg[data-side="${s}"] .seg-btn`).forEach((b) => b.setAttribute('aria-checked', String(b.dataset.type === settings.types[s])));
   }
   $$('#target-row .seg-btn').forEach((b) => b.setAttribute('aria-checked', String(Number(b.dataset.target) === settings.target)));
+  $$('#play-row .seg-btn').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.play === settings.play)));
   $$('#facing-row .seg-btn').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.facing === settings.facing)));
   const cam = needsCamera();
   $('#facing-row').hidden = !cam; $('#facing-lbl').hidden = !cam;
-  $('#btn-start').textContent = cam ? '경기 시작!' : '🤖 컴퓨터끼리 구경하기';
+  $('#btn-start').textContent = hasHuman() ? '경기 시작!' : '🤖 컴퓨터끼리 구경하기';
 }
 for (let s = 0; s < 2; s++) {
   $$(`.seg[data-side="${s}"] .seg-btn`).forEach((b) => b.addEventListener('click', () => { settings.types[s] = b.dataset.type; saveSettings(); renderSetup(); }));
   $(`#name${s}`).addEventListener('change', (e) => { settings.names[s] = e.target.value.trim().slice(0, 6); saveSettings(); });
 }
 $$('#target-row .seg-btn').forEach((b) => b.addEventListener('click', () => { settings.target = Number(b.dataset.target); saveSettings(); renderSetup(); }));
+$$('#play-row .seg-btn').forEach((b) => b.addEventListener('click', () => { settings.play = b.dataset.play; saveSettings(); renderSetup(); }));
 $$('#facing-row .seg-btn').forEach((b) => b.addEventListener('click', () => { settings.facing = b.dataset.facing; settings.cameraId = ''; saveSettings(); renderSetup(); }));
 
 function goTitle() {
   loadCancelled = true;
   if (vision) vision.stopCamera(); // 카메라는 쓰지 않을 때 바로 끔
   engine.setInput(null);
+  engine.disableTouch();
   sound.stopBgm();
   releaseWake();
   engine.startDemo();             // 뒤에서 컴퓨터끼리 시범 경기
@@ -85,7 +91,14 @@ async function startGame() {
   engine.stop();
   engine.setPlayers(settings.types.map((type, s) => ({ type, name: cleanName(settings.names[s], s) })));
   engine.setTarget(settings.target);
-  if (!needsCamera()) { if (vision) vision.stopCamera(); engine.setInput(null); enterLobby(); return; }
+  if (!needsCamera()) {
+    if (vision) vision.stopCamera();
+    engine.setInput(null);
+    if (isTouchPlay()) engine.enableTouch(); else engine.disableTouch();
+    enterLobby();
+    return;
+  }
+  engine.disableTouch();
   loadCancelled = false;
   show('loading'); $('#loading-text').textContent = '카메라 켜는 중… (권한을 허용해 주세요)';
   try {
@@ -261,7 +274,7 @@ let rotateDismissed = false;
 function checkRotate() {
   const portrait = window.innerHeight > window.innerWidth;
   const playing = document.body.dataset.screen && document.body.dataset.screen !== 'title';
-  $('#rotate-hint').hidden = !(portrait && playing && !rotateDismissed && needsCamera());
+  $('#rotate-hint').hidden = !(portrait && playing && !rotateDismissed && hasHuman());
 }
 window.addEventListener('resize', checkRotate);
 $('#rotate-dismiss').addEventListener('click', () => { rotateDismissed = true; checkRotate(); });

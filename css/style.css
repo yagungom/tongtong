@@ -74,12 +74,6 @@ h2 { margin: 0 0 calc(1 * var(--v)); font-size: 1.6em; font-weight: 900; }
 .tagline { margin: 1.2em 0 0; color: #fff; font-weight: 800; font-size: 1.45em; text-shadow: 0 0.12em 0 rgba(0,0,0,0.45); }
 .lbl { font-weight: 900; font-size: 1.05em; margin-top: calc(0.6 * var(--v)); }
 .lbl small { font-weight: 700; color: var(--muted); font-size: 0.8em; }
-  font: inherit; font-size: 1.35em; font-weight: 800; color: var(--ink); background: #fff; user-select: text; -webkit-user-select: text;
-  border: calc(0.24 * var(--u)) solid var(--ink); border-radius: calc(1.2 * var(--u)); padding: 0.45em 0.7em; width: 100%;
-}
-  font: inherit; font-weight: 800; font-size: 0.9em; padding: 0.3em 0.75em; border-radius: 99px; cursor: pointer;
-  background: #fff3c4; border: calc(0.18 * var(--u)) solid var(--ink); color: var(--ink);
-}
 .seg { display: grid; grid-template-columns: 1fr 1fr; gap: calc(0.8 * var(--u)); }
 .seg-btn {
   font: inherit; font-weight: 900; font-size: 1.05em; cursor: pointer; color: var(--ink);

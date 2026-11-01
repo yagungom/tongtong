@@ -81,7 +81,7 @@ export class TennisEngine {
   constructor(canvas, sound) {
     this.cv = canvas; this.ctx = canvas.getContext('2d');
     this.sound = sound; this.handlers = {};
-    this.input = null; this._unsub = null; this.mouseSide = null;
+    this.input = null; this._unsub = null; this.touchMode = false;
     this.players = [mkPlayer(0), mkPlayer(1)];
     this.target = RULES.DEFAULT_TARGET;
     this.state = 'idle'; this.stateT = 0; this.time = 0;
@@ -121,30 +121,84 @@ export class TennisEngine {
     if (vision) this._unsub = vision.onUpdate((now) => this._onPose(now));
   }
 
-  // PC 확인용: 마우스로 한쪽 선수 라켓 움직이기 (?mouse)
-  enableMouse(side = 0) {
-    this.mouseSide = side;
+  // ── 📱 폰 모드: 손가락(PC는 마우스)으로 라켓 ──
+  //  두 사람 → 화면 왼쪽 반을 누르면 왼쪽 선수, 오른쪽 반은 오른쪽 선수 (동시에 여러 손가락 OK)
+  //  한 사람 + 컴퓨터 → 화면 어디를 눌러도 그 사람 라켓
+  //  손가락 = 라켓 손잡이, 라켓 머리는 손가락 위쪽 → 손가락에 공이 안 가려짐
+  enableTouch() {
+    if (this.touchMode) return;
+    this.touchMode = true;
+    this._ptr = new Map();
     const toLocal = (e) => { const r = this.cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; };
-    this.cv.addEventListener('pointermove', (e) => {
-      const q = toLocal(e), now = performance.now(), p = this.players[side], rk = p.rackets[0];
-      const dt = (now - rk.t) / 1000;
-      if (rk.on && dt > 0 && dt < 0.3) { rk.px = rk.x; rk.py = rk.y; rk.vx = (q.x - rk.x) / dt; rk.vy = (q.y - rk.y) / dt; }
-      else { rk.px = q.x; rk.py = q.y; rk.vx = rk.vy = 0; }
-      rk.peak = Math.max(Math.hypot(rk.vx, rk.vy), rk.peak * 0.5);
-      rk.hpx = rk.on ? rk.hx : q.x; rk.hpy = rk.on ? rk.hy : q.y; rk.hx = q.x; rk.hy = q.y;
-      rk.x = q.x; rk.y = q.y; rk.t = now; rk.on = true; rk.dx = 0; rk.dy = -1;
-      rk.r = clamp(110 * 0.55 * LEVELS[p.type].racket, 32, 115);
-      if (this.state !== 'lobby') p.hand = 0;
-      Object.assign(p.body, { ok: true, x: halfCenter(side) - towardNet(side) * 40, shY: 380, hipY: 520, headY: 280, scale: 110 });
-      p.seenAt = now;
-    });
+    const sideFor = (q) => {
+      const hs = this.players.filter((p) => !p.cpu);
+      if (!hs.length) return -1;
+      return hs.length === 1 ? hs[0].side : (q.x < NET_X ? 0 : 1);
+    };
+    this._tDown = (e) => {
+      const q = toLocal(e), s = sideFor(q);
+      if (s < 0) return;
+      this._ptr.set(e.pointerId, s);
+      this._touchMove(s, q, true);
+      this.sound?.unlock?.();
+    };
+    this._tMove = (e) => {
+      const q = toLocal(e);
+      let s = this._ptr.get(e.pointerId);
+      if (s == null) { if (e.pointerType !== 'mouse') return; s = sideFor(q); if (s < 0) return; }
+      for (const ce of e.getCoalescedEvents?.() || [e]) this._touchMove(s, toLocal(ce), false);
+    };
+    this._tUp = (e) => { this._ptr.delete(e.pointerId); };
+    this.cv.addEventListener('pointerdown', this._tDown);
+    this.cv.addEventListener('pointermove', this._tMove);
+    window.addEventListener('pointerup', this._tUp);
+    window.addEventListener('pointercancel', this._tUp);
+  }
+
+  disableTouch() {
+    if (!this.touchMode) return;
+    this.touchMode = false;
+    this.cv.removeEventListener('pointerdown', this._tDown);
+    this.cv.removeEventListener('pointermove', this._tMove);
+    window.removeEventListener('pointerup', this._tUp);
+    window.removeEventListener('pointercancel', this._tUp);
+  }
+
+  _isTouch(p) { return this.touchMode && !p.cpu; }
+
+  _touchMove(s, q, jump) {
+    const p = this.players[s];
+    if (p.cpu) return;
+    const rk = p.rackets[0], now = performance.now(), tn = towardNet(s);
+    const r = clamp(RULES.TOUCH_RACKET * LEVELS[p.type].racket, 32, 115);
+    let dx = tn * 0.45, dy = -1; const dl = Math.hypot(dx, dy); dx /= dl; dy /= dl;   // 네트 쪽으로 살짝 기울임
+    const gx = s === 0 ? clamp(q.x, 0, NET_X + 30) : clamp(q.x, NET_X - 30, W);
+    const gy = clamp(q.y, 0, H);
+    const hx = gx + dx * r * 1.25, hy = gy + dy * r * 1.25;
+    const dt = (now - rk.t) / 1000;
+    if (rk.on && !jump && dt > 0 && dt < 0.3) {
+      rk.px = rk.x; rk.py = rk.y; rk.hpx = rk.hx; rk.hpy = rk.hy;
+      if (dt > 0.004) { rk.vx = (hx - rk.x) / dt; rk.vy = (hy - rk.y) / dt; }
+    } else { rk.px = hx; rk.py = hy; rk.hpx = gx; rk.hpy = gy; rk.vx = rk.vy = 0; }   // 새로 누른 곳은 쓸고 지나간 걸로 안 침
+    rk.peak = Math.max(Math.hypot(rk.vx, rk.vy), rk.peak);
+    rk.x = hx; rk.y = hy; rk.hx = gx; rk.hy = gy; rk.dx = dx; rk.dy = dy; rk.r = r; rk.t = now; rk.on = true;
+    p.hand = 0; p.seenAt = now;
+    // 상대가 칠 때 공이 내 라켓 쪽으로 오도록 '가상의 몸' 위치
+    const sc = 110;
+    Object.assign(p.body, { ok: true, x: hx - tn * sc * 0.8, shY: hy - 60, hipY: hy + 49, headY: hy - 150, scale: sc });
+  }
+
+  _power(p, rk) {
+    if (p.cpu) return p.cpu.power;
+    if (this._isTouch(p)) { const [a, b] = RULES.TOUCH_SWING; return clamp((rk.peak - a) / (b - a), 0, 1); }
+    return swingPower(rk.peak);
   }
 
   // ── 자세 인식 결과 → 몸·라켓 ──
   _onPose(now) {
     const L = this.input?.sides;
     for (const p of this.players) {
-      if (p.cpu || p.side === this.mouseSide) continue;
+      if (p.cpu || this._isTouch(p)) continue;
       const a = L?.[p.side];
       if (!a) {
         for (const rk of p.rackets) if (rk.on && now - rk.t > 250) { rk.on = false; rk.fx.reset(); rk.fy.reset(); }
@@ -270,6 +324,7 @@ export class TennisEngine {
     const p = this.players[s], tn = towardNet(s);
     let x, y;
     if (p.cpu) { x = p.cpu.bodyX + tn * 105; y = 430; }
+    else if (this._isTouch(p)) { x = halfCenter(s) + tn * 70; y = 400; }
     else if (p.body.ok && p.present) { x = p.body.x + tn * p.body.scale * 1.05; y = p.body.shY + p.body.scale * 0.25; }
     else { x = halfCenter(s) + tn * 60; y = 420; }
     x = s === 0 ? clamp(x, 80, NET_X - 90) : clamp(x, NET_X + 90, W - 80);
@@ -419,7 +474,15 @@ export class TennisEngine {
 
   _update(dt) {
     const now = performance.now();
-    if (this.mouseSide != null) this.players[this.mouseSide].seenAt = now;
+    if (this.touchMode) {
+      for (const p of this.players) {
+        if (p.cpu) continue;
+        p.seenAt = now;                                  // 폰 모드는 항상 '있음'
+        const rk = p.rackets[0];
+        rk.peak *= Math.exp(-dt * 6);                     // 손가락을 멈추면 힘도 빠짐
+        if (now - rk.t > 60) { rk.px = rk.x; rk.py = rk.y; rk.hpx = rk.hx; rk.hpy = rk.hy; } // 멈춘 라켓은 그 자리에서만 침
+      }
+    }
     for (const p of this.players) p.present = !!p.cpu || now - p.seenAt < 450;
     if (this.active && !this.demo) this._checkAbsent(now);
     this._updateFx(dt);
@@ -446,7 +509,7 @@ export class TennisEngine {
   }
 
   _checkAbsent(now) {
-    const gone = (p, ms) => !p.cpu && p.side !== this.mouseSide && now - p.seenAt > ms;
+    const gone = (p, ms) => !p.cpu && !this.touchMode && now - p.seenAt > ms;
     if (!this.frozen) {
       const miss = this.players.filter((p) => gone(p, RULES.ABSENT_PAUSE_MS));
       if (miss.length) { this.frozen = 'absent'; this.freezeT = 0; this.backAt = 0; this.missing = miss.map((p) => p.side); this.emit('absent', true); }
@@ -465,7 +528,7 @@ export class TennisEngine {
   _readyBallPos(s) {
     const p = this.players[s], tn = towardNet(s);
     let x = halfCenter(s), y = 300;
-    if (!p.cpu && p.present && p.body.ok) {
+    if (!p.cpu && !this._isTouch(p) && p.present && p.body.ok) {
       x = p.body.x + tn * p.body.scale * 1.1; y = p.body.shY;
       x = s === 0 ? clamp(x, 90, NET_X - 80) : clamp(x, NET_X + 80, W - 90); y = clamp(y, 170, GY - 140);
     }
@@ -513,7 +576,7 @@ export class TennisEngine {
     for (const rk of this._activeRackets(p)) {
       if (!rk.on) continue;
       const rr = rk.r + BR;
-      if (segDist2(b.x, b.y, rk.px, rk.py, rk.x, rk.y) < rr * rr) { this._doHit(s, p.cpu ? p.cpu.power : swingPower(rk.peak)); return; }
+      if (segDist2(b.x, b.y, rk.px, rk.py, rk.x, rk.y) < rr * rr) { this._doHit(s, this._power(p, rk)); return; }
     }
   }
 
@@ -575,7 +638,7 @@ export class TennisEngine {
       for (const rk of this._activeRackets(p)) {
         if (!rk.on) continue;
         const rr = rk.r + BR;
-        if (segDist2(b.x, b.y, rk.px, rk.py, rk.x, rk.y) < rr * rr) { this._doHit(s, p.cpu ? p.cpu.power : swingPower(rk.peak)); return; }
+        if (segDist2(b.x, b.y, rk.px, rk.py, rk.x, rk.y) < rr * rr) { this._doHit(s, this._power(p, rk)); return; }
       }
     }
   }
@@ -734,6 +797,11 @@ export class TennisEngine {
 
   _drawPlayer(c, p, showReady) {
     if (p.cpu) { this._drawCpu(c, p); return; }
+    if (this._isTouch(p)) {
+      if (p.rackets[0].on) this._drawRacket(c, p.rackets[0], p.color);
+      this._nameTag(c, p, halfCenter(p.side), GROUND + 34);
+      return;
+    }
     if (!p.present || !p.body.ok) {
       const absent = this.frozen === 'absent' && this.missing.includes(p.side);
       if (showReady || absent || this.state === 'countdown') this._drawGhost(c, p, !absent);
@@ -847,10 +915,10 @@ export class TennisEngine {
       c.beginPath(); c.arc(q.x, q.y, 52 * pulse, 0, TAU); c.fillStyle = 'rgba(255,255,255,0.22)'; c.fill();
       c.lineWidth = 4; c.strokeStyle = 'rgba(255,255,255,0.85)'; c.stroke();
       this._drawBall(c, q.x, q.y, this.time * 2, 34);
-      text(c, this.state === 'over' ? '한 판 더? 공을 톡!' : '라켓 쥘 손으로 톡!', q.x, q.y + 80, { size: 30 });
+      text(c, this.state === 'over' ? '한 판 더? 공을 톡!' : this._isTouch(p) ? '손가락으로 톡!' : '라켓 쥘 손으로 톡!', q.x, q.y + 80, { size: 30 });
     }
     if (this.state === 'lobby') {
-      const msg = '양쪽에 한 명씩! 공을 톡 친 손이 라켓 손이 돼요';
+      const msg = this.touchMode ? '자기 쪽 공을 손가락으로 톡 치면 시작! 쓸어 올리듯 치면 세게 나가요' : '양쪽에 한 명씩! 공을 톡 친 손이 라켓 손이 돼요';
       c.font = `900 26px ${FONT}`;
       const w = c.measureText(msg).width + 44;
       rrect(c, W / 2 - w / 2, 18, w, 50, 25); c.fillStyle = 'rgba(255,250,242,0.94)'; c.fill(); c.lineWidth = 4; c.strokeStyle = INK; c.stroke();
