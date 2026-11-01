@@ -59,7 +59,7 @@ function rrect(c, x, y, w, h, r) {
 }
 
 function mkRacket() {
-  return { on: false, x: 0, y: 0, px: 0, py: 0, rx: 0, ry: 0, vx: 0, vy: 0, peak: 0, dx: 0, dy: -1, r: 50, t: 0, fx: new OneEuro(), fy: new OneEuro() };
+  return { on: false, x: 0, y: 0, px: 0, py: 0, rx: 0, ry: 0, vx: 0, vy: 0, peak: 0, act: 0, dx: 0, dy: -1, r: 50, t: 0, hx: 0, hy: 0, hpx: 0, hpy: 0, hist: [], fx: new OneEuro(), fy: new OneEuro() };
 }
 function mkCpu(side) {
   const x = halfCenter(side) - towardNet(side) * 40;
@@ -70,11 +70,11 @@ function mkPlayer(side) {
     side, name: side ? '2P' : '1P', type: 'adult', color: SIDE_COLORS[side], score: 0,
     seenAt: -1e9, present: false,
     body: { ok: false, x: halfCenter(side), shY: 380, hipY: 520, headY: 290, scale: 100 },
-    rackets: [mkRacket(), mkRacket()], ready: false, readyHitT: -9, cpu: null, hits: 0, smashes: 0,
+    rackets: [mkRacket(), mkRacket()], hand: null, ready: false, readyHitT: -9, cpu: null, hits: 0, smashes: 0,
   };
 }
 function mkBall() {
-  return { x: W * 0.25, y: 400, vx: 0, vy: 0, e: 0.7, rot: 0, spin: 0, lastHitter: -1, bounces: [0, 0], netHit: false, visible: false, trail: [], power: 0, sx: 0, sy: 0 };
+  return { x: W * 0.25, y: 400, vx: 0, vy: 0, e: 0.7, rot: 0, spin: 0, lastHitter: -1, bounces: [0, 0], netHit: false, visible: false, trail: [], power: 0, sx: 0, sy: 0, squash: 0, squashA: 0 };
 }
 
 export class TennisEngine {
@@ -90,6 +90,7 @@ export class TennisEngine {
     this.server = 0; this.rally = 0; this.maxRally = 0; this.shotId = 0; this.totalShots = 0;
     this.lastPoint = null; this.banner = null; this.cdShown = 0;
     this.fx = []; this.pops = [];
+    this.hitStop = 0; this.shake = 0;
     this.demo = false; this.debug = false;
     this.fps = 60; this._fpsN = 0; this._fpsT = performance.now();
     this._last = performance.now(); this._acc = 0;
@@ -109,8 +110,8 @@ export class TennisEngine {
       p.name = cfg.name || (s ? '2P' : '1P');
       p.type = LEVELS[cfg.type] ? cfg.type : 'adult';
       p.cpu = p.type === 'cpu' ? mkCpu(s) : null;
-      p.body.ok = false; p.seenAt = -1e9;
-      for (const rk of p.rackets) { rk.on = false; rk.fx.reset(); rk.fy.reset(); }
+      p.body.ok = false; p.seenAt = -1e9; p.hand = p.cpu ? 0 : null;
+      for (const rk of p.rackets) { rk.on = false; rk.act = 0; rk.fx.reset(); rk.fy.reset(); }
     });
   }
   setTarget(n) { this.target = RULES.TARGETS.includes(n) ? n : RULES.DEFAULT_TARGET; }
@@ -130,9 +131,11 @@ export class TennisEngine {
       if (rk.on && dt > 0 && dt < 0.3) { rk.px = rk.x; rk.py = rk.y; rk.vx = (q.x - rk.x) / dt; rk.vy = (q.y - rk.y) / dt; }
       else { rk.px = q.x; rk.py = q.y; rk.vx = rk.vy = 0; }
       rk.peak = Math.max(Math.hypot(rk.vx, rk.vy), rk.peak * 0.5);
+      rk.hpx = rk.on ? rk.hx : q.x; rk.hpy = rk.on ? rk.hy : q.y; rk.hx = q.x; rk.hy = q.y;
       rk.x = q.x; rk.y = q.y; rk.t = now; rk.on = true; rk.dx = 0; rk.dy = -1;
-      rk.r = clamp(110 * 0.5 * LEVELS[p.type].racket, 30, 110);
-      Object.assign(p.body, { ok: true, x: clamp(q.x - towardNet(side) * 90, 60, W - 60), shY: 380, hipY: 520, headY: 280, scale: 110 });
+      rk.r = clamp(110 * 0.55 * LEVELS[p.type].racket, 32, 115);
+      if (this.state !== 'lobby') p.hand = 0;
+      Object.assign(p.body, { ok: true, x: halfCenter(side) - towardNet(side) * 40, shY: 380, hipY: 520, headY: 280, scale: 110 });
       p.seenAt = now;
     });
   }
@@ -150,7 +153,27 @@ export class TennisEngine {
       p.seenAt = now;
       this._updateBody(p, a);
       this._updateHands(p, a, now);
+      // 라켓 손이 화면 밖으로 나가 한동안 안 보이면 다른 손으로 넘김 (게임이 멈추지 않게)
+      if (p.hand != null && this.state !== 'lobby') {
+        const cur = p.rackets[p.hand], other = p.rackets[1 - p.hand];
+        if (!cur.on && other.on && now - cur.t > 700) p.hand = 1 - p.hand;
+      }
     }
+  }
+
+  // 지금 칠 수 있는 라켓: 사람은 고른 손 하나만 (고르기 전엔 양손), 컴퓨터는 하나
+  _activeRackets(p) {
+    if (p.cpu) return [p.rackets[0]];
+    return p.hand == null ? p.rackets : [p.rackets[p.hand]];
+  }
+
+  // '바로 시작'처럼 손을 안 고르고 시작하면: 많이 움직인 손 → 네트 쪽 손
+  _pickHand(p) {
+    if (p.cpu || p.hand != null) return;
+    const [a, b] = p.rackets;
+    if (a.on !== b.on) p.hand = a.on ? 0 : 1;
+    else if (Math.abs(a.act - b.act) > 120) p.hand = a.act > b.act ? 0 : 1;
+    else p.hand = (a.x - b.x) * towardNet(p.side) >= 0 ? 0 : 1;
   }
 
   _updateBody(p, a) {
@@ -185,7 +208,7 @@ export class TennisEngine {
       let dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl;
       if (rk.on) { dx = lerp(rk.dx, dx, 0.5); dy = lerp(rk.dy, dy, 0.5); dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl; }
       // 라켓 크기는 사람 크기(어깨 폭)에 맞춤 → 멀리 서도 가까이 서도 비슷하게 맞음
-      const r = clamp(p.body.scale * 0.5 * lv.racket, 30, 110);
+      const r = clamp(p.body.scale * 0.55 * lv.racket, 32, 115);
       const hx = palmX + dx * r * 1.25, hy = palmY + dy * r * 1.25;
       const dt = (now - rk.t) / 1000;
       // 인식이 순간 튀면(사람 손으로 불가능한 속도) 그 사이 경로로는 치지 않게 → 엉뚱한 득점 방지
@@ -195,8 +218,12 @@ export class TennisEngine {
       const fx = rk.fx.filter(hx, t), fy = rk.fy.filter(hy, t);
       if (rk.on && !teleport && dt > 0 && dt < 0.3) { rk.px = rk.x; rk.py = rk.y; rk.vx = (fx - rk.x) / dt; rk.vy = (fy - rk.y) / dt; }
       else { rk.px = fx; rk.py = fy; rk.vx = rk.vy = 0; }
-      rk.peak = Math.max(Math.hypot(rk.vx, rk.vy), rk.peak * 0.5);
+      const speed = Math.hypot(rk.vx, rk.vy);
+      rk.peak = Math.max(speed, rk.peak * 0.5);
+      rk.act = rk.act * 0.85 + speed * 0.15;
+      rk.hpx = rk.on && !teleport ? rk.hx : fx - dx * r * 1.25; rk.hpy = rk.on && !teleport ? rk.hy : fy - dy * r * 1.25;
       rk.x = fx; rk.y = fy; rk.dx = dx; rk.dy = dy; rk.r = r; rk.t = now; rk.on = true;
+      rk.hx = fx - dx * r * 1.25; rk.hy = fy - dy * r * 1.25; // 손 위치
     }
   }
 
@@ -213,7 +240,7 @@ export class TennisEngine {
 
   enterLobby() {
     this.demo = false; this.frozen = null; this.banner = null;
-    for (const p of this.players) { p.score = 0; p.ready = !!p.cpu; p.readyHitT = -9; }
+    for (const p of this.players) { p.score = 0; p.ready = !!p.cpu; p.readyHitT = -9; p.hand = p.cpu ? 0 : null; }
     this.ball.visible = false;
     this._setState('lobby');
     this.emit('lobby');
@@ -228,7 +255,7 @@ export class TennisEngine {
   }
 
   _startMatch() {
-    for (const p of this.players) { p.score = 0; p.hits = 0; p.smashes = 0; }
+    for (const p of this.players) { p.score = 0; p.hits = 0; p.smashes = 0; this._pickHand(p); }
     this.maxRally = 0; this.totalShots = 0; this.lastPoint = null;
     this.server = Math.random() < 0.5 ? 0 : 1;
     this._newServe();
@@ -260,47 +287,81 @@ export class TennisEngine {
   }
 
   // ── 치기: 받는 사람 앞으로 가는 궤적 계산 (자동 도움) ──
+  //  공이 받는 사람 바로 앞(허리~가슴 높이)에 도착하는 시간 = 받는 사람 종류별 slow~fast (세게 칠수록 짧음)
+  //  그 시간 안에서 '한 번 튀고' 도착하도록 떨어질 곳과 튀는 세기를 계산. 네트에 걸리면 조금씩 높게
   _doHit(side, power) {
-    const b = this.ball, opp = 1 - side, R = this.players[opp], lv = LEVELS[R.type], tn = towardNet(opp);
+    const b = this.ball, opp = 1 - side, R = this.players[opp], lv = LEVELS[R.type];
+    const tn = towardNet(opp), dir = side === 0 ? 1 : -1;
     let bx, shY, hipY, sc;
     if (R.cpu) { bx = R.cpu.bodyX; shY = R.cpu.shY; hipY = R.cpu.hipY; sc = 105; }
     else if (R.body.ok) ({ x: bx, shY, hipY, scale: sc } = R.body);
     else { bx = halfCenter(opp); shY = 380; hipY = 520; sc = 100; }
-    // 공이 튄 뒤 가장 높이 뜨는 곳 = 받는 사람 바로 앞, 허리~가슴 높이
     const jit = lv.jitter * (0.35 + power * 0.85);
-    let xr = bx + tn * sc * 0.9 + randn() * 70 * jit;
+    let xr = bx + tn * sc * 0.8 + randn() * 70 * jit;
     let yr = hipY * 0.55 + shY * 0.45 + randn() * 35 * jit;
     xr = opp === 0 ? clamp(xr, 90, NET_X - 150) : clamp(xr, NET_X + 150, W - 90);
     yr = clamp(yr, 250, GY - 80);
-    const ta = Math.sqrt(2 * (GY - yr) / G);           // 튄 뒤 꼭대기까지 걸리는 시간
-    const x0 = b.x, y0 = Math.min(b.y, GY - 4);
-    let T = lerp(lv.slow, lv.fast, power), vx = 0, vy = 0;
-    for (let i = 0; i < 18; i++, T += 0.08) {
-      vx = (xr - x0) / (T + ta);
-      const xL = x0 + vx * T, minL = 70;                // 떨어지는 곳은 네트에서 조금 떨어지게
-      if (opp === 1 && xL < NET_X + minL) vx = (NET_X + minL - x0) / T;
-      if (opp === 0 && xL > NET_X - minL) vx = (NET_X - minL - x0) / T;
-      vy = (GY - y0 - 0.5 * G * T * T) / T;
-      const tc = (NET_X - x0) / vx;                      // 네트 넘을 때 높이 확인
-      if (tc > 0 && tc < T && y0 + vy * tc + 0.5 * G * tc * tc > NET_TOP - BR - 24) continue;
-      break;
+    const lim = NET_TOP - BR * 0.6 - 12, edge = NET_HALF + BR + 2;   // 네트에 안 닿을 높이·폭
+    const x0 = b.x;
+    let y0 = Math.min(b.y, GY - 4);
+    if (Math.abs(x0 - NET_X) < edge + 6 && y0 > lim - 6) { y0 = lim - 6; b.y = y0; }  // 네트에 붙은 낮은 공은 살짝 띄워서
+    let Ttot = lerp(lv.slow, lv.fast, power), vx = 0, vy = 0, T = 0, ok = false;
+    for (let k = 0; k < 16 && !ok; k++) {
+      vx = (xr - x0) / Ttot;
+      const smin = Math.max(0.5, (NET_X + dir * 60 - x0) / (xr - x0)); // 네트 바로 앞에 떨어지는 건 X
+      for (let split = smin; split <= 0.92 && !ok; split += 0.04) {
+        T = Ttot * split;
+        vy = (GY - y0 - 0.5 * G * T * T) / T;
+        let clip = false;                                           // 네트 앞·가운데·뒤 높이 확인
+        for (const ex of [-edge, 0, edge]) {
+          const tc = (NET_X + ex * dir - x0) / vx;
+          if (tc > 0 && tc < T && y0 + vy * tc + 0.5 * G * tc * tc > lim) clip = true;
+        }
+        if (!clip) ok = true;
+      }
+      if (!ok) Ttot += 0.08;
     }
-    const vLand = vy + G * T;
-    b.vx = vx; b.vy = vy; b.e = clamp((G * ta) / Math.max(vLand, 1), 0.35, 0.97);
+    if (!ok) { T = Ttot * 0.8; vx = (xr - x0) / Ttot; vy = (GY - y0 - 0.5 * G * T * T) / T; }
+    const t2 = Ttot - T, vLand = vy + G * T;
+    const vb = (GY - yr + 0.5 * G * t2 * t2) / Math.max(t2, 0.05);  // 받는 사람 앞에서 그 높이가 되게 튀는 세기
+    b.vx = vx; b.vy = vy; b.e = clamp(vb / Math.max(vLand, 1), 0.35, 0.95);
     b.lastHitter = side; b.bounces = [0, 0]; b.netHit = false; b.power = power;
-    b.spin = towardNet(side) * (6 + power * 14);
+    b.spin = dir * (8 + power * 22);
+    b.trail = [];
     this.shotId++; this.totalShots++;
     const P = this.players[side];
     P.hits++;
-    this._ring(b.x, b.y, P.color, 26, 90);
-    this.snd('pok', power);
-    if (power >= RULES.SMASH_POWER) { P.smashes++; this.snd('smash'); this._pop('스매시!', b.x, b.y - 50, '#ffd93d', 44); }
+    this._impact(b.x, b.y, P.color, power, Math.atan2(vy, vx));
+    if (power >= RULES.SMASH_POWER) { P.smashes++; this._pop('스매시!', b.x, b.y - 60, '#ffd93d', 54); }
+    else if (power >= 0.42) this._pop(['나이스!', '굿샷!', '좋아!', '팡!'][Math.floor(Math.random() * 4)], b.x, b.y - 52, '#fff', 36);
     if (this.state === 'serve') this._setState('rally');
     else {
       this.rally++;
       this.maxRally = Math.max(this.maxRally, this.rally);
       if (this.rally >= 5 && this.rally % 5 === 0) { this.snd('cheer'); this._pop(`랠리 ${this.rally}!`, W / 2, 150, '#fff', 46); }
     }
+  }
+
+  // 맞는 순간: 멈칫(히트스톱) + 화면 흔들림 + 번쩍 + 불꽃 + 소리 (세게 칠수록 크게)
+  _impact(x, y, color, power, ang) {
+    const [s0, s1] = RULES.HIT_STOP, [k0, k1] = RULES.SHAKE;
+    this.hitStop = Math.max(this.hitStop, lerp(s0, s1, power));
+    this.shake = Math.max(this.shake, lerp(k0, k1, power));
+    const b = this.ball; b.squash = 1; b.squashA = ang;
+    this.fx.push({ k: 'flash', x, y, r0: 12, r1: 70 + power * 80, t: 0, life: 0.16 });
+    this._ring(x, y, color, 24, 110 + power * 90);
+    if (power > 0.3) this._ring(x, y, '#fff', 18, 70 + power * 60);
+    const n = Math.round(10 + power * 18);
+    for (let i = 0; i < n; i++) {                  // 공이 날아가는 쪽으로 튀는 불꽃
+      const a = ang + rand(-0.75, 0.75), v = rand(260, 620) * (0.6 + power);
+      this.fx.push({ k: 'spark', x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t: 0, life: rand(0.18, 0.38), color: i % 3 ? '#ffd93d' : color, w: rand(3, 6) });
+    }
+    for (let i = 0; i < 10; i++) {                 // 집중선
+      const a = (i / 10) * TAU + rand(-0.15, 0.15);
+      this.fx.push({ k: 'line', x, y, a, r0: 30 + power * 20, r1: 110 + power * 120, t: 0, life: 0.14 + power * 0.06 });
+    }
+    this.snd('pok', power);
+    if (power >= RULES.SMASH_POWER) this.snd('smash');
   }
 
   _score(winner, reason) {
@@ -363,7 +424,10 @@ export class TennisEngine {
     if (this.active && !this.demo) this._checkAbsent(now);
     this._updateFx(dt);
     if (this.banner) { this.banner.t += dt; if (this.banner.t > this.banner.life) this.banner = null; }
+    this.shake *= Math.exp(-dt * 14);
+    const b0 = this.ball; if (b0.squash > 0) b0.squash = Math.max(0, b0.squash - dt * 8);
     if (this.frozen) { this.freezeT += dt; return; }
+    if (this.hitStop > 0) { this.hitStop -= dt; return; }   // 맞는 순간 멈칫
     this.time += dt; this.stateT += dt;
     for (const p of this.players) if (p.cpu) this._cpuStep(p, dt);
     switch (this.state) {
@@ -417,11 +481,15 @@ export class TennisEngine {
     for (const p of this.players) {
       if (p.ready || !p.present) continue;
       const q = this._readyBallAt(p.side);
-      for (const rk of p.rackets) {
-        if (!rk.on) continue;
-        const rr = rk.r + 34;
-        if (segDist2(q.x, q.y, rk.px, rk.py, rk.x, rk.y) < rr * rr) {
+      for (let h = 0; h < 2; h++) {
+        const rk = p.rackets[h];
+        if (!rk.on || (p.cpu && h)) continue;
+        const rr = rk.r + 34, hr = 62;
+        const byRacket = (p.cpu || p.hand === h) && segDist2(q.x, q.y, rk.px, rk.py, rk.x, rk.y) < rr * rr;
+        const byHand = !p.cpu && segDist2(q.x, q.y, rk.hpx, rk.hpy, rk.hx, rk.hy) < hr * hr;
+        if (byRacket || byHand) {
           p.ready = true; p.readyHitT = this.time;
+          if (!p.cpu) p.hand = h;                  // 공을 친 손이 라켓 손
           this.snd('ready'); this._burst(q.x, q.y, p.color, 22); this._ring(q.x, q.y, '#fff', 30, 110);
           break;
         }
@@ -442,7 +510,7 @@ export class TennisEngine {
     b.x = b.sx; b.y = b.sy + Math.sin(this.time * 3) * 8;
     if (this.stateT > RULES.SERVE_AUTO_SEC && !p.cpu) { this._pop('톡!', b.x, b.y - 46, '#fff', 34); this._doHit(s, 0.1); return; }
     if (this.stateT < 0.6) return;
-    for (const rk of p.rackets) {
+    for (const rk of this._activeRackets(p)) {
       if (!rk.on) continue;
       const rr = rk.r + BR;
       if (segDist2(b.x, b.y, rk.px, rk.py, rk.x, rk.y) < rr * rr) { this._doHit(s, p.cpu ? p.cpu.power : swingPower(rk.peak)); return; }
@@ -452,8 +520,11 @@ export class TennisEngine {
   _ballStep(dt) {
     const b = this.ball;
     if (!b.visible) return;
-    b.vy += G * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.rot += b.spin * dt;
-    if ((this._trailN = (this._trailN || 0) + 1) % 2 === 0) { b.trail.push({ x: b.x, y: b.y }); if (b.trail.length > 12) b.trail.shift(); }
+    b.x += b.vx * dt; b.y += b.vy * dt + 0.5 * G * dt * dt; b.vy += G * dt; b.rot += b.spin * dt;  // 정확한 포물선 (계산한 궤적 그대로)
+    b.trail.push({ x: b.x, y: b.y }); if (b.trail.length > 18 + Math.round(b.power * 14)) b.trail.shift();
+    if (b.power >= RULES.SMASH_POWER && this.state === 'rally' && Math.random() < 0.5) {   // 스매시 공은 불꽃을 흘리며 날아감
+      this.fx.push({ k: 'dot', x: b.x + rand(-6, 6), y: b.y + rand(-6, 6), vx: -b.vx * 0.15 + rand(-40, 40), vy: -b.vy * 0.15 + rand(-60, 0), r: rand(3, 6), color: Math.random() < 0.5 ? '#ff7a3c' : '#ffd93d', t: 0, life: rand(0.2, 0.4) });
+    }
     // 네트
     if (!b.netHit && Math.abs(b.x - NET_X) < NET_HALF + BR && b.y > NET_TOP - BR * 0.6) {
       b.netHit = true;
@@ -476,7 +547,11 @@ export class TennisEngine {
       }
       b.vy = -impact * e;
       if (b.vy > -70) { b.vy = 0; b.vx *= 0.97; }
-      if (impact > 160) { this.snd('bounce'); this._dust(b.x, GROUND); }
+      if (impact > 160) {
+        this.snd('bounce', b.power); this._dust(b.x, GROUND, b.power);
+        b.squash = 0.8; b.squashA = Math.PI / 2;
+        if (b.power >= RULES.SMASH_POWER && b.bounces[side] === 1) { this.shake = Math.max(this.shake, 7); this._ring(b.x, GROUND, '#ffd93d', 10, 90); }
+      }
     }
     // 화면 밖으로
     if (b.x < -BR * 2 || b.x > W + BR * 2) {
@@ -497,7 +572,7 @@ export class TennisEngine {
       const s = p.side;
       if (b.lastHitter === s || !onSide(b.x, s, RULES.HIT_MARGIN)) continue;
       if (!p.present) continue;
-      for (const rk of p.rackets) {
+      for (const rk of this._activeRackets(p)) {
         if (!rk.on) continue;
         const rr = rk.r + BR;
         if (segDist2(b.x, b.y, rk.px, rk.py, rk.x, rk.y) < rr * rr) { this._doHit(s, p.cpu ? p.cpu.power : swingPower(rk.peak)); return; }
@@ -506,16 +581,20 @@ export class TennisEngine {
   }
 
   // ── 컴퓨터 선수 ──
-  _predictApex(s) {
-    const b = this.ball, dt = 1 / 120;
-    let { x, y, vx, vy } = b, bounced = 0;
+  // 공이 한 번 튄 뒤 컴퓨터 몸 앞을 지나는 곳 (없으면 튄 뒤 꼭대기)
+  _predictHit(s) {
+    const b = this.ball, dt = 1 / 120, sx = this.players[s].cpu.bodyX + towardNet(s) * 90, d = Math.sign(b.vx) || 1;
+    let { x, y, vx, vy } = b, bounced = 0, apex = null;
     for (let i = 0; i < 600; i++) {
-      vy += G * dt; x += vx * dt; y += vy * dt;
+      x += vx * dt; y += vy * dt + 0.5 * G * dt * dt; vy += G * dt;
       if (y >= GY && vy > 0) { y = GY; bounced++; vy = -vy * (bounced === 1 ? b.e : 0.62); }
-      if (bounced >= 1 && vy >= 0 && onSide(x, s)) return { x, y };
-      if (x < -60 || x > W + 60) return null;
+      if (bounced >= 1 && onSide(x, s)) {
+        if ((x - sx) * d >= 0 && y < GY - 60) return { x, y, t: i * dt };
+        if (!apex && vy >= 0) apex = { x, y, t: i * dt };
+      }
+      if (x < -60 || x > W + 60) break;
     }
-    return null;
+    return apex;
   }
 
   _cpuStep(p, dt) {
@@ -525,15 +604,21 @@ export class TennisEngine {
       tx = b.x; ty = b.y; fast = true; bodyT = b.sx - tn * 105;
     } else if (this.state === 'rally' && b.lastHitter !== s && b.visible && !b.netHit) {
       if (c.planShot !== this.shotId) {
-        c.planShot = this.shotId; c.plan = this._predictApex(s);
+        c.planShot = this.shotId; c.plan = this._predictHit(s); c.planT = this.time;
         const miss = Math.random() < 0.1 + Math.min(0.25, this.rally * 0.015);
         c.err = miss ? { x: 0, y: (Math.random() < 0.5 ? -1 : 1) * (rk.r + BR + rand(25, 60)) } : { x: rand(-0.3, 0.3) * rk.r, y: rand(-0.3, 0.3) * rk.r };
-        c.power = rand(0.15, 0.65); c.react = rand(0.12, 0.3);
+        c.power = rand(0.2, 0.8); c.react = rand(0.06, 0.18);
       }
       c.react -= dt;
-      if (c.plan && c.react <= 0) { tx = c.plan.x + c.err.x; ty = c.plan.y + c.err.y; bodyT = c.plan.x - tn * 105; }
+      if (c.plan && c.react <= 0) {
+        // 공이 오기 직전에 뒤로 뺐다가 앞으로 휘두름
+        const left = c.plan.t - (this.time - c.planT);
+        const sw = left > 0.16 ? -45 : 70;
+        tx = c.plan.x + c.err.x + tn * sw; ty = c.plan.y + c.err.y; bodyT = c.plan.x - tn * 105;
+        fast = left <= 0.16;
+      }
     }
-    const step = 430 * dt;
+    const step = 560 * dt;
     c.bodyX += clamp(bodyT - c.bodyX, -step, step);
     c.bodyX = s === 0 ? clamp(c.bodyX, 70, NET_X - 110) : clamp(c.bodyX, NET_X + 110, W - 70);
     // 팔 길이 안에서만
@@ -542,7 +627,7 @@ export class TennisEngine {
     const reach = 200, minR = rk.r * 1.25 + 34;
     if (dl > reach) { tx = shX + ddx / dl * reach; ty = shY + ddy / dl * reach; }
     if (dl < minR) { tx = shX + ddx / dl * minR; ty = shY + ddy / dl * minR; }
-    const sp = (fast ? 1500 : 950) * dt;
+    const sp = (fast ? 1900 : 1200) * dt;
     const mx = clamp(tx - c.rx, -sp, sp), my = clamp(ty - c.ry, -sp, sp);
     rk.px = c.rx; rk.py = c.ry; c.rx += mx; c.ry += my;
     rk.x = c.rx; rk.y = c.ry; rk.vx = mx / dt; rk.vy = my / dt; rk.on = true; rk.r = 50;
@@ -555,11 +640,15 @@ export class TennisEngine {
   _burst(x, y, color, n = 18) {
     for (let i = 0; i < n; i++) { const a = rand(0, TAU), v = rand(120, 380); this.fx.push({ k: 'dot', x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 120, r: rand(4, 8), color: i % 3 ? color : '#ffd93d', t: 0, life: rand(0.5, 0.9) }); }
   }
-  _dust(x, y) { for (let i = 0; i < 6; i++) this.fx.push({ k: 'dot', x: x + rand(-10, 10), y, vx: rand(-90, 90), vy: rand(-120, -40), r: rand(3, 6), color: 'rgba(255,255,255,0.8)', t: 0, life: 0.4 }); }
+  _dust(x, y, power = 0) {
+    const n = 6 + Math.round(power * 10);
+    for (let i = 0; i < n; i++) this.fx.push({ k: 'dot', x: x + rand(-10, 10), y, vx: rand(-140, 140) * (1 + power), vy: rand(-160, -40) * (1 + power * 0.6), r: rand(3, 6), color: 'rgba(255,255,255,0.85)', t: 0, life: 0.4 });
+  }
   _updateFx(dt) {
     for (const f of this.fx) {
       f.t += dt;
       if (f.k === 'dot') { f.vy += 600 * dt; f.x += f.vx * dt; f.y += f.vy * dt; }
+      else if (f.k === 'spark') { f.vx *= 0.9; f.vy = f.vy * 0.9 + 500 * dt; f.x += f.vx * dt; f.y += f.vy * dt; }
       else if (f.k === 'conf') { f.vy = Math.min(f.vy + 120 * dt, 260); f.x += (f.vx + Math.sin(f.t * 3 + f.rot) * 40) * dt; f.y += f.vy * dt; f.rot += f.vr * dt; }
     }
     this.fx = this.fx.filter((f) => f.t < f.life);
@@ -573,12 +662,15 @@ export class TennisEngine {
     c.setTransform(this.cv.width / W, 0, 0, this.cv.height / H, 0, 0);
     if (this.input && this.input.drawTo(c, W, H)) { c.fillStyle = 'rgba(14,10,40,0.18)'; c.fillRect(0, 0, W, H); }
     else this._drawStadium(c);
+    c.save();
+    if (this.shake > 0.5) c.translate(rand(-1, 1) * this.shake, rand(-1, 1) * this.shake);
     this._drawCourt(c);
     const showReady = (this.state === 'lobby') || (this.state === 'over' && this.stateT > 2.6);
     for (const p of this.players) this._drawPlayer(c, p, showReady);
     if (showReady) this._drawReady(c);
     if (this.ball.visible) this._drawBallFull(c);
     this._drawFx(c);
+    c.restore();
     if (this.state !== 'idle' && !this.demo) this._drawHud(c);
     this._drawOverlays(c);
     if (this.debug) this._drawDebug(c);
@@ -647,7 +739,8 @@ export class TennisEngine {
       if (showReady || absent || this.state === 'countdown') this._drawGhost(c, p, !absent);
       return;
     }
-    for (const rk of p.rackets) if (rk.on) this._drawRacket(c, rk, p.color);
+    if (p.hand == null) { for (const rk of p.rackets) if (rk.on) this._drawHand(c, rk, p.color); }
+    else if (p.rackets[p.hand].on) this._drawRacket(c, p.rackets[p.hand], p.color);
     this._nameTag(c, p, p.body.x, Math.max(48, p.body.headY - 22));
   }
 
@@ -672,8 +765,29 @@ export class TennisEngine {
     if (label) text(c, `${SIDE_LABELS[p.side]} 선수는 여기에 서요 🙋`, x, 610, { size: 28 });
   }
 
+  // 라켓 손을 고르기 전: 손바닥에 노란 동그라미
+  _drawHand(c, rk, color) {
+    const k = 1 + Math.sin(this.time * 6) * 0.08;
+    c.beginPath(); c.arc(rk.hx, rk.hy, 26 * k, 0, TAU); c.fillStyle = 'rgba(255,217,61,0.85)'; c.fill();
+    c.lineWidth = 4; c.strokeStyle = INK; c.stroke();
+    c.beginPath(); c.arc(rk.hx, rk.hy, 36 * k, 0, TAU); c.lineWidth = 3; c.strokeStyle = color; c.stroke();
+  }
+
   _drawRacket(c, rk, color) {
     const r = rk.r, ang = Math.atan2(rk.dy, rk.dx);
+    // 휘두른 자국: 최근 라켓 머리 위치를 잔상으로
+    const hs = rk.hist;
+    hs.push({ x: rk.x, y: rk.y, a: ang }); if (hs.length > 7) hs.shift();
+    const sweep = hs.length > 2 ? Math.hypot(hs[hs.length - 1].x - hs[0].x, hs[hs.length - 1].y - hs[0].y) : 0;
+    if (sweep > 70) {
+      c.save(); c.lineCap = 'round'; c.lineJoin = 'round';
+      for (let i = 1; i < hs.length; i++) {
+        const a = i / hs.length;
+        c.strokeStyle = `rgba(255,255,255,${0.12 + a * 0.4})`; c.lineWidth = r * 1.5 * a;
+        c.beginPath(); c.moveTo(hs[i - 1].x, hs[i - 1].y); c.lineTo(hs[i].x, hs[i].y); c.stroke();
+      }
+      c.restore();
+    }
     const gx = rk.x - rk.dx * r * 1.25, gy = rk.y - rk.dy * r * 1.25;   // 손 위치
     const ex = rk.x - rk.dx * r * 0.92, ey = rk.y - rk.dy * r * 0.92;
     c.save();
@@ -733,10 +847,10 @@ export class TennisEngine {
       c.beginPath(); c.arc(q.x, q.y, 52 * pulse, 0, TAU); c.fillStyle = 'rgba(255,255,255,0.22)'; c.fill();
       c.lineWidth = 4; c.strokeStyle = 'rgba(255,255,255,0.85)'; c.stroke();
       this._drawBall(c, q.x, q.y, this.time * 2, 34);
-      text(c, this.state === 'over' ? '한 판 더? 공을 톡!' : '손으로 공을 톡!', x, q.y - 82, { size: 32 });
+      text(c, this.state === 'over' ? '한 판 더? 공을 톡!' : '라켓 쥘 손으로 톡!', q.x, q.y + 80, { size: 30 });
     }
     if (this.state === 'lobby') {
-      const msg = '양쪽에 한 명씩 서서, 자기 쪽 공을 손으로 톡 치면 시작!';
+      const msg = '양쪽에 한 명씩! 공을 톡 친 손이 라켓 손이 돼요';
       c.font = `900 26px ${FONT}`;
       const w = c.measureText(msg).width + 44;
       rrect(c, W / 2 - w / 2, 18, w, 50, 25); c.fillStyle = 'rgba(255,250,242,0.94)'; c.fill(); c.lineWidth = 4; c.strokeStyle = INK; c.stroke();
@@ -744,8 +858,10 @@ export class TennisEngine {
     }
   }
 
-  _drawBall(c, x, y, rot, r) {
-    c.save(); c.translate(x, y); c.rotate(rot);
+  _drawBall(c, x, y, rot, r, squash = 0, sqA = 0) {
+    c.save(); c.translate(x, y);
+    if (squash > 0) { c.rotate(sqA); c.scale(1 + squash * 0.45, 1 - squash * 0.3); c.rotate(-sqA); }
+    c.rotate(rot);
     const g = c.createRadialGradient(-r * 0.35, -r * 0.35, r * 0.1, 0, 0, r);
     g.addColorStop(0, '#f8ffa8'); g.addColorStop(0.6, '#d9f23f'); g.addColorStop(1, '#a6c21a');
     c.beginPath(); c.arc(0, 0, r, 0, TAU); c.fillStyle = g; c.fill();
@@ -759,25 +875,34 @@ export class TennisEngine {
   }
 
   _drawBallFull(c) {
-    const b = this.ball, hot = b.power >= RULES.SMASH_POWER && this.state === 'rally';
-    b.trail.forEach((q, i) => {
-      const a = (i + 1) / b.trail.length;
-      c.beginPath(); c.arc(q.x, q.y, BR * (0.35 + a * 0.5), 0, TAU);
-      c.fillStyle = hot ? `rgba(255,120,60,${a * 0.55})` : `rgba(255,255,255,${a * 0.35})`; c.fill();
-    });
+    const b = this.ball, live = this.state === 'rally';
+    // 꼬리: 세게 칠수록 길고 뜨겁게 (흰색 → 노랑 → 불꽃)
+    const tr = b.trail;
+    if (tr.length > 2) {
+      const hot = live && b.power >= RULES.SMASH_POWER, warm = live && b.power >= 0.42;
+      const col = hot ? '255,110,50' : warm ? '255,210,70' : '255,255,255';
+      c.save(); c.lineCap = 'round';
+      for (let i = 1; i < tr.length; i++) {
+        const a = i / tr.length;
+        c.strokeStyle = `rgba(${col},${a * (hot ? 0.85 : 0.55)})`;
+        c.lineWidth = BR * 2 * a * (hot ? 1.1 : 0.85);
+        c.beginPath(); c.moveTo(tr[i - 1].x, tr[i - 1].y); c.lineTo(tr[i].x, tr[i].y); c.stroke();
+      }
+      c.restore();
+    }
     if (this.state === 'serve') {
       const p = this.players[this.server];
       if (!p.cpu && this.stateT > 3) {
         const k = 1 + Math.sin(this.time * 7) * 0.12;
         c.beginPath(); c.arc(b.x, b.y, 44 * k, 0, TAU); c.lineWidth = 5; c.strokeStyle = '#ffd93d'; c.stroke();
-        text(c, '라켓으로 톡!', b.x, b.y - 70, { size: 30, color: '#ffd93d' });
+        text(c, '라켓으로 팡!', b.x, b.y - 70, { size: 30, color: '#ffd93d' });
       }
     }
     if (b.y < -BR) {  // 화면 위로 높이 뜬 공 표시
       const x = clamp(b.x, 20, W - 20);
       c.beginPath(); c.moveTo(x, 6); c.lineTo(x - 16, 34); c.lineTo(x + 16, 34); c.closePath();
       c.fillStyle = '#d9f23f'; c.fill(); c.lineWidth = 3; c.strokeStyle = INK; c.stroke();
-    } else this._drawBall(c, b.x, b.y, b.rot, BR);
+    } else this._drawBall(c, b.x, b.y, b.rot, BR * (this.hitStop > 0 ? 1.25 : 1), b.squash, b.squashA);
   }
 
   _drawFx(c) {
@@ -788,6 +913,17 @@ export class TennisEngine {
         c.globalAlpha = a; c.lineWidth = 6 * a + 1; c.strokeStyle = f.color; c.stroke(); c.globalAlpha = 1;
       } else if (f.k === 'dot') {
         c.globalAlpha = a; c.fillStyle = f.color; c.beginPath(); c.arc(f.x, f.y, f.r, 0, TAU); c.fill(); c.globalAlpha = 1;
+      } else if (f.k === 'flash') {
+        const k = f.t / f.life;
+        c.beginPath(); c.arc(f.x, f.y, lerp(f.r0, f.r1, Math.sqrt(k)), 0, TAU);
+        c.fillStyle = `rgba(255,255,240,${0.85 * (1 - k)})`; c.fill();
+      } else if (f.k === 'spark') {
+        c.globalAlpha = a; c.strokeStyle = f.color; c.lineWidth = f.w; c.lineCap = 'round';
+        c.beginPath(); c.moveTo(f.x, f.y); c.lineTo(f.x - f.vx * 0.04, f.y - f.vy * 0.04); c.stroke(); c.globalAlpha = 1;
+      } else if (f.k === 'line') {
+        const k = f.t / f.life, r0 = lerp(f.r0, f.r1, k * 0.6), r1 = lerp(f.r0, f.r1, Math.min(1, k + 0.4));
+        c.globalAlpha = a; c.strokeStyle = '#fff'; c.lineWidth = 4 * a + 1; c.lineCap = 'round';
+        c.beginPath(); c.moveTo(f.x + Math.cos(f.a) * r0, f.y + Math.sin(f.a) * r0); c.lineTo(f.x + Math.cos(f.a) * r1, f.y + Math.sin(f.a) * r1); c.stroke(); c.globalAlpha = 1;
       } else if (f.k === 'conf') {
         c.save(); c.translate(f.x, f.y); c.rotate(f.rot); c.globalAlpha = Math.min(1, a * 2);
         c.fillStyle = f.color; c.fillRect(-f.r, -f.r * 0.45, f.r * 2, f.r * 0.9); c.restore();

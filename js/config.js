@@ -15,20 +15,21 @@ export const COURT = Object.freeze({
   H: 720,
   GROUND: 652,      // 바닥(공이 튀는 곳) 높이
   NET_X: 640,       // 네트 위치 = 화면 가운데 (왼쪽 선수 | 오른쪽 선수)
-  NET_TOP: 548,     // 네트 위쪽 끝
+  NET_TOP: 572,     // 네트 위쪽 끝 (낮을수록 빠른 직선 공이 잘 넘어감)
   NET_HALF: 6,      // 네트 두께의 절반
   BALL_R: 17,       // 공 반지름
-  GRAVITY: 980,     // 중력 (px/s²)
+  GRAVITY: 1500,    // 중력 (px/s²) — 클수록 공이 묵직하고 빠르게 떨어짐
 });
 
 // 선수 종류 — '받는 쪽' 기준으로 공 속도·정확도가 정해짐 (아이에게는 느리고 정확하게)
-//  racket: 라켓 크기 배율 · slow/fast: 살살 쳤을 때 / 세게 쳤을 때 상대 코트까지 걸리는 시간(초)
+//  racket: 라켓 크기 배율 · slow/fast: 살살 쳤을 때 / 세게 쳤을 때 공이 받는 사람 앞까지 가는 시간(초)
+//    (작을수록 팍팍 넘어감. 낮은 공은 네트를 넘기려고 자동으로 조금 느려짐)
 //  jitter: 공이 받는 사람 앞으로 정확히 가는 정도 (클수록 여기저기)
 //  bounces: 이 쪽 코트에서 몇 번까지 튕겨도 되는지 (어른 1번 = 테니스 규칙, 어린이 2번)
 export const LEVELS = Object.freeze({
-  adult: { label: '어른', emoji: '🧑', racket: 1.0, slow: 1.55, fast: 0.95, jitter: 1.0, bounces: 1 },
-  kid: { label: '어린이', emoji: '🧒', racket: 1.4, slow: 1.95, fast: 1.5, jitter: 0.3, bounces: 2 },
-  cpu: { label: '컴퓨터', emoji: '🤖', racket: 1.0, slow: 1.55, fast: 1.0, jitter: 0.9, bounces: 1 },
+  adult: { label: '어른', emoji: '🧑', racket: 1.0, slow: 1.2, fast: 0.68, jitter: 1.0, bounces: 1 },
+  kid: { label: '어린이', emoji: '🧒', racket: 1.4, slow: 1.75, fast: 1.35, jitter: 0.3, bounces: 2 },
+  cpu: { label: '컴퓨터', emoji: '🤖', racket: 1.0, slow: 1.2, fast: 0.72, jitter: 0.9, bounces: 1 },
 });
 
 export const RULES = Object.freeze({
@@ -41,8 +42,10 @@ export const RULES = Object.freeze({
   RETURN_MS: 700,          // 다시 보이고 이만큼 지나면 이어서
   SMASH_POWER: 0.72,       // 이보다 세게 휘두르면 '스매시!'
   SWING_MIN: 260,          // 라켓 속도(px/s) — 이 아래는 살살 친 공
-  SWING_MAX: 2600,         //                    이 위는 가장 센 공
+  SWING_MAX: 2400,         //                    이 위는 가장 센 공
   HIT_MARGIN: 40,          // 네트 너머 이만큼까지는 내 공으로 쳐 줌 (네트 앞 발리)
+  HIT_STOP: [0.04, 0.11],  // 맞는 순간 멈칫하는 시간(초): 살살 ~ 세게 → 타격감
+  SHAKE: [3, 14],          // 맞는 순간 화면 흔들림(px): 살살 ~ 세게
 });
 
 export const SIDE_COLORS = Object.freeze(['#4d96ff', '#ff6b6b']);

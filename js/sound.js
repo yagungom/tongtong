@@ -13,15 +13,28 @@ export class TennisSound extends Sound {
     src.connect(f); f.connect(g); g.connect(this.master); src.start(t); src.stop(t + dur + 0.05);
   }
 
-  // 라켓에 맞는 '퐁' (세게 칠수록 높고 큼)
+  // 라켓에 맞는 '팡!' — 낮은 '퍽'(몸통) + 높은 '딱'(줄) + 짧은 '퐁' (세게 칠수록 크고 높게)
   pok(power = 0.3) {
     this.sfx(() => {
-      this._noise(0.06, { freq: 1600 + power * 1800, q: 2, vol: 0.35 + power * 0.25 });
-      this.tone(520 + power * 320, 0.09, { type: 'triangle', vol: 0.28, slide: 300 + power * 200 });
+      this.tone(150 + power * 50, 0.1, { type: 'sine', vol: 0.5 + power * 0.2, slide: 50 });
+      this._noise(0.045, { freq: 2600 + power * 2000, q: 1.4, vol: 0.4 + power * 0.35 });
+      this.tone(720 + power * 520, 0.08, { type: 'triangle', vol: 0.22, slide: 360 });
     });
   }
-  smash() { this.sfx(() => { this._noise(0.25, { type: 'lowpass', freq: 3000, slideTo: 300, vol: 0.4 }); this.tone(900, 0.2, { type: 'sawtooth', vol: 0.08, slide: 220 }); }); }
-  bounce() { this.sfx(() => this.tone(190, 0.12, { type: 'sine', vol: 0.3, slide: 90 })); }
+  // 스매시: '쉭' 바람 소리 + 낮은 '쾅'
+  smash() {
+    this.sfx(() => {
+      this._noise(0.28, { type: 'bandpass', freq: 700, slideTo: 4200, q: 0.8, vol: 0.35 });
+      this.tone(95, 0.35, { type: 'sine', vol: 0.55, slide: 38 });
+      this.tone(1400, 0.12, { type: 'square', vol: 0.06, slide: 700, when: 0.02 });
+    });
+  }
+  bounce(power = 0) {
+    this.sfx(() => {
+      this.tone(230, 0.08, { type: 'sine', vol: 0.32, slide: 110 });
+      if (power > 0.5) this._noise(0.08, { type: 'lowpass', freq: 900, vol: 0.3 });
+    });
+  }
   netHit() { this.sfx(() => { this._noise(0.3, { type: 'lowpass', freq: 700, vol: 0.45 }); this.tone(120, 0.25, { type: 'sine', vol: 0.3, slide: 60 }); }); }
   point() { this.sfx(() => [659, 784, 988].forEach((f, i) => this.tone(f, 0.14, { type: 'triangle', vol: 0.22, when: i * 0.08 }))); }
   ready() { this.sfx(() => { this.tone(880, 0.1, { type: 'triangle', vol: 0.22 }); this.tone(1320, 0.16, { type: 'triangle', vol: 0.18, when: 0.08 }); }); }
