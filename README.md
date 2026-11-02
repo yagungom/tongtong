@@ -114,4 +114,4 @@ vercel.json, _headers   보안 헤더
 - 실내가 너무 어둡거나 사람 뒤가 복잡하면 인식이 거칠어집니다. 밝은 곳, 단순한 벽 앞이 좋아요.
 - 구경하는 가족은 카메라에 안 나오게(또는 선수보다 뒤에) 서 주세요. 반쪽에 여러 명이 있으면 먼저 잡힌 한 명이 선수가 돼요.
 - 처음 실행할 때 인식 엔진을 받느라 몇 초 걸리고, 이후엔 캐시됩니다.
-- 라이선스: MediaPipe 엔진·모델은 Apache-2.0 (`vendor/mediapipe/NOTICE.txt`, `models/NOTICE.txt`).
+- 라이선스: MediaPipe 엔진·모델은 Apache-2.0. 출처는 `vendor/mediapipe/NOTICE.txt`·`models/NOTICE.txt`, 라이선스 전문은 같은 폴더의 `LICENSE.txt`.
